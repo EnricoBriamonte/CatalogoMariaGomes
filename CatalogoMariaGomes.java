@@ -77,6 +77,8 @@ public class CatalogoMariaGomes {
                 createMovement(exchange);
             } else if (path.startsWith("/uploads/") && readRequest) {
                 serveUpload(exchange, path);
+            } else if (readRequest) {
+                catalog(exchange);
             } else {
                 send(exchange, 404, page("Nao encontrado", "<main class='wrap'><h1>Pagina nao encontrada</h1></main>"));
             }
