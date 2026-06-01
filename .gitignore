@@ -1,0 +1,6 @@
+*.class
+*.zip
+server.out
+server.err
+.DS_Store
+Thumbs.db

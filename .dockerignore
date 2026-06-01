@@ -1,0 +1,4 @@
+*.class
+server.out
+server.err
+.git
