@@ -34,6 +34,7 @@ public class CatalogoMariaGomes {
     private static final Path MOVEMENTS_FILE = DATA_DIR.resolve("movimentacoes.tsv");
     private static final Path CATALOG_SEEDED_FILE = DATA_DIR.resolve("catalogo_mahluz_inicializado.flag");
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+    private static final String WHATSAPP_NUMBER = "5511988673088";
     private static final Store STORE = new Store();
 
     public static void main(String[] args) throws Exception {
@@ -102,7 +103,7 @@ public class CatalogoMariaGomes {
         html.append("<section class='client-hero boutique-hero'><div class='brand-lockup'>").append(logoSvg("hero-logo")).append("</div>");
         html.append("<div class='hero-copy'><p class='eyebrow'>Boutique digital</p><h1>Peças escolhidas com carinho para momentos que pedem brilho.</h1>");
         html.append("<p>Uma curadoria delicada de semijoias e bolsas em quantidades limitadas. Favorite suas escolhas e chame no WhatsApp para reservar.</p>");
-        html.append("<div class='hero-actions'><a class='button' href='https://wa.me/?text=Ola%2C%20vim%20pelo%20catalogo%20MAHLUZ%20Semi%20Joias%20e%20quero%20ver%20as%20pecas%20disponiveis' target='_blank'>Atendimento pelo WhatsApp</a><a class='button secondary-button' href='/novo'>Cadastrar produto</a></div></div>");
+        html.append("<div class='hero-actions'><a class='button' href='").append(whatsappUrl("Ola, vim pelo catalogo MAHLUZ Semi Joias e quero ver as pecas disponiveis")).append("' target='_blank'>Atendimento pelo WhatsApp</a><a class='button secondary-button' href='/novo'>Cadastrar produto</a></div></div>");
         html.append("<div class='hero-note'><span>Atendimento humano</span><span>Curadoria exclusiva</span><span>Peças limitadas</span></div></section>");
 
         String itemLabel = visibleProducts.size() == 1 ? " peça selecionada" : " peças selecionadas";
@@ -352,12 +353,16 @@ public class CatalogoMariaGomes {
 
     private static String reserveUrl(Product p) {
         String message = "Oi! Vi a peça " + displayName(p, 0) + " no catálogo 😍";
-        return "https://wa.me/?text=" + URLEncoder.encode(message, StandardCharsets.UTF_8);
+        return whatsappUrl(message);
     }
 
     private static String combineReserveUrl(Product first, Product second) {
         String message = "Oi! Vi a combinação " + first.name + " + " + second.name + " no catálogo 😍";
-        return "https://wa.me/?text=" + URLEncoder.encode(message, StandardCharsets.UTF_8);
+        return whatsappUrl(message);
+    }
+
+    private static String whatsappUrl(String message) {
+        return "https://wa.me/" + WHATSAPP_NUMBER + "?text=" + URLEncoder.encode(message, StandardCharsets.UTF_8);
     }
 
     private static String logoSvg(String className) {
