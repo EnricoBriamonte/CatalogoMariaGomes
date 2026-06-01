@@ -57,16 +57,17 @@ public class CatalogoMariaGomes {
         try {
             String path = exchange.getRequestURI().getPath();
             String method = exchange.getRequestMethod();
+            boolean readRequest = method.equals("GET") || method.equals("HEAD");
 
-            if ((path.equals("/") || path.equals("/catalogo")) && method.equals("GET")) {
+            if ((path.equals("/") || path.equals("/catalogo")) && readRequest) {
                 catalog(exchange);
-            } else if (path.equals("/admin") && method.equals("GET")) {
+            } else if (path.equals("/admin") && readRequest) {
                 admin(exchange);
-            } else if (path.equals("/novo") && method.equals("GET")) {
+            } else if (path.equals("/novo") && readRequest) {
                 productForm(exchange, null);
             } else if (path.equals("/produtos") && method.equals("POST")) {
                 createProduct(exchange);
-            } else if (path.startsWith("/editar/") && method.equals("GET")) {
+            } else if (path.startsWith("/editar/") && readRequest) {
                 editProduct(exchange, path);
             } else if (path.startsWith("/atualizar/") && method.equals("POST")) {
                 updateProduct(exchange, path);
@@ -74,7 +75,7 @@ public class CatalogoMariaGomes {
                 deleteProduct(exchange, path);
             } else if (path.equals("/movimentacao") && method.equals("POST")) {
                 createMovement(exchange);
-            } else if (path.startsWith("/uploads/") && method.equals("GET")) {
+            } else if (path.startsWith("/uploads/") && readRequest) {
                 serveUpload(exchange, path);
             } else {
                 send(exchange, 404, page("Nao encontrado", "<main class='wrap'><h1>Pagina nao encontrada</h1></main>"));
@@ -392,6 +393,11 @@ public class CatalogoMariaGomes {
         }
         Headers headers = exchange.getResponseHeaders();
         headers.set("Content-Type", Files.probeContentType(file) == null ? "application/octet-stream" : Files.probeContentType(file));
+        if (exchange.getRequestMethod().equals("HEAD")) {
+            exchange.sendResponseHeaders(200, -1);
+            exchange.close();
+            return;
+        }
         exchange.sendResponseHeaders(200, Files.size(file));
         try (OutputStream out = exchange.getResponseBody()) {
             Files.copy(file, out);
@@ -489,6 +495,11 @@ public class CatalogoMariaGomes {
     private static void send(HttpExchange exchange, int status, String text) throws IOException {
         byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+        if (exchange.getRequestMethod().equals("HEAD")) {
+            exchange.sendResponseHeaders(status, -1);
+            exchange.close();
+            return;
+        }
         exchange.sendResponseHeaders(status, bytes.length);
         try (OutputStream out = exchange.getResponseBody()) {
             out.write(bytes);
