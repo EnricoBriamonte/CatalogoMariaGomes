@@ -35,6 +35,9 @@ public class CatalogoMariaGomes {
     private static final Path CATALOG_SEEDED_FILE = DATA_DIR.resolve("catalogo_mahluz_inicializado.flag");
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
     private static final String WHATSAPP_NUMBER = "5511988673088";
+    private static final String ADMIN_PASSWORD = System.getenv().getOrDefault("ADMIN_PASSWORD", "admin-" + UUID.randomUUID().toString().substring(0, 8));
+    private static final String ADMIN_COOKIE = "mahluz_admin";
+    private static final String ADMIN_TOKEN = UUID.randomUUID().toString();
     private static final Store STORE = new Store();
 
     public static void main(String[] args) throws Exception {
@@ -52,6 +55,9 @@ public class CatalogoMariaGomes {
 
         System.out.println("Catalogo Maria Gomes no ar: http://localhost:" + port);
         System.out.println("Painel administrativo: http://localhost:" + port + "/admin");
+        if (System.getenv("ADMIN_PASSWORD") == null) {
+            System.out.println("Senha temporaria do admin: " + ADMIN_PASSWORD);
+        }
     }
 
     private static void route(HttpExchange exchange) throws IOException {
@@ -62,19 +68,32 @@ public class CatalogoMariaGomes {
 
             if ((path.equals("/") || path.equals("/catalogo")) && readRequest) {
                 catalog(exchange);
+            } else if (path.equals("/login") && readRequest) {
+                loginForm(exchange);
+            } else if (path.equals("/login") && method.equals("POST")) {
+                login(exchange);
+            } else if (path.equals("/sair") && readRequest) {
+                logout(exchange);
             } else if (path.equals("/admin") && readRequest) {
+                if (!requireAdmin(exchange)) return;
                 admin(exchange);
             } else if (path.equals("/novo") && readRequest) {
+                if (!requireAdmin(exchange)) return;
                 productForm(exchange, null);
             } else if (path.equals("/produtos") && method.equals("POST")) {
+                if (!requireAdmin(exchange)) return;
                 createProduct(exchange);
             } else if (path.startsWith("/editar/") && readRequest) {
+                if (!requireAdmin(exchange)) return;
                 editProduct(exchange, path);
             } else if (path.startsWith("/atualizar/") && method.equals("POST")) {
+                if (!requireAdmin(exchange)) return;
                 updateProduct(exchange, path);
             } else if (path.startsWith("/excluir/") && method.equals("POST")) {
+                if (!requireAdmin(exchange)) return;
                 deleteProduct(exchange, path);
             } else if (path.equals("/movimentacao") && method.equals("POST")) {
+                if (!requireAdmin(exchange)) return;
                 createMovement(exchange);
             } else if (path.startsWith("/uploads/") && readRequest) {
                 serveUpload(exchange, path);
@@ -87,6 +106,54 @@ public class CatalogoMariaGomes {
             ex.printStackTrace();
             send(exchange, 500, page("Erro", "<main class='wrap'><h1>Erro interno</h1><p>" + esc(ex.getMessage()) + "</p></main>"));
         }
+    }
+
+    private static boolean requireAdmin(HttpExchange exchange) throws IOException {
+        if (isAdmin(exchange)) return true;
+        if (exchange.getRequestMethod().equals("GET") || exchange.getRequestMethod().equals("HEAD")) {
+            redirect(exchange, "/login");
+            return false;
+        }
+        throw new IllegalArgumentException("Acesso restrito ao administrador");
+    }
+
+    private static boolean isAdmin(HttpExchange exchange) {
+        String cookie = exchange.getRequestHeaders().getFirst("Cookie");
+        if (cookie == null) return false;
+        for (String item : cookie.split(";")) {
+            String[] pair = item.trim().split("=", 2);
+            if (pair.length == 2 && pair[0].equals(ADMIN_COOKIE) && pair[1].equals(ADMIN_TOKEN)) return true;
+        }
+        return false;
+    }
+
+    private static void loginForm(HttpExchange exchange) throws IOException {
+        if (isAdmin(exchange)) {
+            redirect(exchange, "/admin");
+            return;
+        }
+        StringBuilder html = new StringBuilder();
+        html.append("<main class='wrap narrow login-card'><p class='eyebrow'>Acesso administrativo</p><h1>Entrar no painel</h1>");
+        html.append("<p class='form-hint'>Area reservada para cadastro de produtos, fotos, precos e estoque.</p>");
+        html.append("<form class='form' method='post' action='/login'>");
+        html.append("<label>Senha<input type='password' name='password' autocomplete='current-password' required></label>");
+        html.append("<button class='button' type='submit'>Entrar</button></form></main>");
+        send(exchange, 200, page("Login - MAHLUZ", html.toString()));
+    }
+
+    private static void login(HttpExchange exchange) throws IOException {
+        Map<String, String> form = urlEncoded(exchange);
+        if (Objects.equals(form.getOrDefault("password", ""), ADMIN_PASSWORD)) {
+            exchange.getResponseHeaders().add("Set-Cookie", ADMIN_COOKIE + "=" + ADMIN_TOKEN + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400");
+            redirect(exchange, "/admin");
+            return;
+        }
+        send(exchange, 403, page("Login - MAHLUZ", "<main class='wrap narrow login-card'><h1>Senha incorreta</h1><p class='form-hint'>Tente novamente para acessar o painel administrativo.</p><a class='button' href='/login'>Voltar</a></main>"));
+    }
+
+    private static void logout(HttpExchange exchange) throws IOException {
+        exchange.getResponseHeaders().add("Set-Cookie", ADMIN_COOKIE + "=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+        redirect(exchange, "/catalogo");
     }
 
     private static void catalog(HttpExchange exchange) throws IOException {
@@ -103,7 +170,7 @@ public class CatalogoMariaGomes {
         html.append("<section class='client-hero boutique-hero'><div class='brand-lockup'>").append(logoSvg("hero-logo")).append("</div>");
         html.append("<div class='hero-copy'><p class='eyebrow'>Boutique digital</p><h1>Peças escolhidas com carinho para momentos que pedem brilho.</h1>");
         html.append("<p>Uma curadoria delicada de semijoias e bolsas em quantidades limitadas. Favorite suas escolhas e chame no WhatsApp para reservar.</p>");
-        html.append("<div class='hero-actions'><a class='button' href='").append(whatsappUrl("Ola, vim pelo catalogo MAHLUZ Semi Joias e quero ver as pecas disponiveis")).append("' target='_blank'>Atendimento pelo WhatsApp</a><a class='button secondary-button' href='/novo'>Cadastrar produto</a></div></div>");
+        html.append("<div class='hero-actions'><a class='button' href='").append(whatsappUrl("Ola, vim pelo catalogo MAHLUZ Semi Joias e quero ver as pecas disponiveis")).append("' target='_blank'>Atendimento pelo WhatsApp</a></div></div>");
         html.append("<div class='hero-note'><span>Atendimento humano</span><span>Curadoria exclusiva</span><span>Peças limitadas</span></div></section>");
 
         String itemLabel = visibleProducts.size() == 1 ? " peça selecionada" : " peças selecionadas";
@@ -126,7 +193,7 @@ public class CatalogoMariaGomes {
 
     private static void admin(HttpExchange exchange) throws IOException {
         StringBuilder html = new StringBuilder();
-        html.append("<main class='wrap admin'><div class='topbar'><div><p class='eyebrow'>MAHLUZ Semi Joias</p><h1>Controle do catalogo</h1></div><div class='admin-menu'><a class='button secondary-button' href='/catalogo'>Ver catalogo</a><a class='button' href='/novo'>Cadastrar produto</a></div></div>");
+        html.append("<main class='wrap admin'><div class='topbar'><div><p class='eyebrow'>MAHLUZ Semi Joias</p><h1>Controle do catalogo</h1></div><div class='admin-menu'><a class='button secondary-button' href='/catalogo'>Ver catalogo</a><a class='button secondary-button' href='/sair'>Sair</a><a class='button' href='/novo'>Cadastrar produto</a></div></div>");
         html.append("<section class='stats'><div><b>").append(STORE.products().size()).append("</b><span>produtos</span></div>");
         html.append("<div><b>").append(STORE.totalStock()).append("</b><span>itens em estoque</span></div>");
         html.append("<div><b>").append(money(STORE.stockValue())).append("</b><span>valor em estoque</span></div></section>");
