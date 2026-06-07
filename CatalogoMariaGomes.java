@@ -594,6 +594,7 @@ public class CatalogoMariaGomes {
     }
 
     private static String money(BigDecimal value) {
+        if (value == null || value.compareTo(BigDecimal.ZERO) <= 0) return "Valor a definir";
         return "R$ " + String.format(Locale.of("pt", "BR"), "%,.2f", value);
     }
 
