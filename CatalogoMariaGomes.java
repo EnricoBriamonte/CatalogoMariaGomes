@@ -15,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -161,7 +162,7 @@ public class CatalogoMariaGomes {
         List<Product> visibleProducts = STORE.products().stream().filter(p -> p.active).toList();
         List<Product> limitedProducts = visibleProducts.stream().filter(p -> p.stock <= 2).toList();
         List<Product> featuredProducts = visibleProducts.stream().filter(p -> p.stock > 0).limit(6).toList();
-        List<Product> newProducts = visibleProducts.stream().limit(4).toList();
+        List<Product> newProducts = STORE.latestNewProducts(visibleProducts);
         List<Product> eleganceProducts = visibleProducts.stream().filter(p -> containsAny(p, "bolsa", "colar", "elegance", "milano", "verona")).limit(4).toList();
         if (eleganceProducts.isEmpty()) eleganceProducts = featuredProducts;
         List<Product> auraProducts = visibleProducts.stream().filter(p -> containsAny(p, "brinco", "pulseira", "anel", "luna", "aurora")).limit(4).toList();
@@ -178,7 +179,7 @@ public class CatalogoMariaGomes {
         if (visibleProducts.isEmpty()) {
             html.append("<div class='empty'>Novas peças serão cadastradas em breve.</div>");
         }
-        html.append(collectionSection("Chegou Hoje", "Novidades selecionadas para quem gosta de ver primeiro.", newProducts, true));
+        html.append(collectionSection("Novidades", "O lote mais recente cadastrado pela loja fica em destaque ate uma nova atualizacao.", newProducts, true));
         html.append(collectionSection("Peças Exclusivas", "Quase únicas, disponíveis por pouco tempo.", limitedProducts.isEmpty() ? featuredProducts : limitedProducts, false));
         if (visibleProducts.size() > 2) {
             html.append(collectionSection("Destaques da Semana", "Escolhas com mais presença para elevar a produção.", featuredProducts, false));
@@ -234,6 +235,7 @@ public class CatalogoMariaGomes {
         Map<String, Part> parts = multipart(exchange);
         Product p = new Product();
         p.id = UUID.randomUUID().toString();
+        p.createdAt = LocalDateTime.now();
         fillProduct(p, parts);
         p.image = saveImage(parts.get("image"), "");
         STORE.addProduct(p);
@@ -334,7 +336,7 @@ public class CatalogoMariaGomes {
     private static String collectionSection(String title, String subtitle, List<Product> products, boolean arrival) {
         if (products.isEmpty()) return "";
         StringBuilder html = new StringBuilder();
-        html.append("<section class='collection ").append(arrival ? "arrival" : "").append("'><div class='collection-head'><div><p class='eyebrow'>").append(arrival ? "Chegou hoje" : "Curadoria MAHLUZ").append("</p>");
+        html.append("<section class='collection ").append(arrival ? "arrival" : "").append("'><div class='collection-head'><div><p class='eyebrow'>").append(arrival ? "Novidades" : "Curadoria MAHLUZ").append("</p>");
         html.append("<h2>").append(esc(title)).append("</h2><p>").append(esc(subtitle)).append("</p></div></div>");
         html.append("<div class='boutique-grid'>");
         for (int i = 0; i < products.size(); i++) {
@@ -604,6 +606,7 @@ public class CatalogoMariaGomes {
         int stock;
         String image;
         boolean active = true;
+        LocalDateTime createdAt;
     }
 
     static class Movement {
@@ -642,6 +645,7 @@ public class CatalogoMariaGomes {
                     p.stock = Integer.parseInt(f[5]);
                     p.image = dec(f[6]);
                     p.active = Boolean.parseBoolean(f[7]);
+                    p.createdAt = f.length >= 9 && !f[8].isBlank() ? LocalDateTime.parse(f[8]) : null;
                     products.add(p);
                 }
             }
@@ -705,6 +709,7 @@ public class CatalogoMariaGomes {
             p.stock = stock;
             p.image = image;
             p.active = true;
+            p.createdAt = null;
             products.add(p);
         }
 
@@ -724,6 +729,19 @@ public class CatalogoMariaGomes {
 
         List<Product> products() {
             return products.stream().sorted(Comparator.comparing(p -> p.name.toLowerCase(Locale.ROOT))).toList();
+        }
+
+        List<Product> latestNewProducts(List<Product> source) {
+            Optional<LocalDate> latestDate = source.stream()
+                    .map(p -> p.createdAt)
+                    .filter(Objects::nonNull)
+                    .map(LocalDateTime::toLocalDate)
+                    .max(LocalDate::compareTo);
+            if (latestDate.isEmpty()) return List.of();
+            return source.stream()
+                    .filter(p -> p.createdAt != null && Objects.equals(p.createdAt.toLocalDate(), latestDate.get()))
+                    .sorted(Comparator.comparing((Product p) -> p.createdAt).reversed())
+                    .toList();
         }
 
         List<Movement> movements() {
@@ -760,7 +778,7 @@ public class CatalogoMariaGomes {
         void save() throws IOException {
             Files.createDirectories(DATA_DIR);
             List<String> productLines = products.stream().map(p -> String.join("\t",
-                    p.id, enc(p.name), enc(p.category), enc(p.description), p.price.toPlainString(), String.valueOf(p.stock), enc(p.image), String.valueOf(p.active))).toList();
+                    p.id, enc(p.name), enc(p.category), enc(p.description), p.price.toPlainString(), String.valueOf(p.stock), enc(p.image), String.valueOf(p.active), p.createdAt == null ? "" : p.createdAt.toString())).toList();
             Files.write(PRODUCTS_FILE, productLines, StandardCharsets.UTF_8);
 
             List<String> movementLines = movements.stream().map(m -> String.join("\t",
