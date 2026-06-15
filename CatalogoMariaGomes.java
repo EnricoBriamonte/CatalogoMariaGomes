@@ -7,7 +7,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.math.BigDecimal;
+import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
+import java.net.URL;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -27,6 +29,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class CatalogoMariaGomes {
     private static final Path DATA_DIR = Path.of("data");
@@ -39,14 +43,20 @@ public class CatalogoMariaGomes {
     private static final String ADMIN_PASSWORD = System.getenv().getOrDefault("ADMIN_PASSWORD", "admin-" + UUID.randomUUID().toString().substring(0, 8));
     private static final String ADMIN_COOKIE = "mahluz_admin";
     private static final String ADMIN_TOKEN = UUID.randomUUID().toString();
+    private static final String GITHUB_REPO = System.getenv().getOrDefault("GITHUB_REPO", "EnricoBriamonte/CatalogoMariaGomes");
+    private static final String GITHUB_BRANCH = System.getenv().getOrDefault("GITHUB_BRANCH", "main");
+    private static final String GITHUB_TOKEN = System.getenv().getOrDefault("GITHUB_TOKEN", "");
     private static final Store STORE = new Store();
 
     public static void main(String[] args) throws Exception {
         Files.createDirectories(DATA_DIR);
         Files.createDirectories(UPLOAD_DIR);
+        GitHubPersistence.downloadFile("data/produtos.tsv", PRODUCTS_FILE);
+        GitHubPersistence.downloadFile("data/movimentacoes.tsv", MOVEMENTS_FILE);
         STORE.load();
         STORE.seedExamplesIfNeeded();
         STORE.clearGeneratedImageRefs();
+        GitHubPersistence.downloadReferencedImages(STORE.products());
 
         int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -456,7 +466,9 @@ public class CatalogoMariaGomes {
         int dot = part.filename.lastIndexOf('.');
         if (dot >= 0 && dot < part.filename.length() - 1) extension = part.filename.substring(dot).replaceAll("[^A-Za-z0-9.]", "");
         String filename = UUID.randomUUID() + extension;
-        Files.copy(new java.io.ByteArrayInputStream(part.bytes), UPLOAD_DIR.resolve(filename), StandardCopyOption.REPLACE_EXISTING);
+        Path imageFile = UPLOAD_DIR.resolve(filename);
+        Files.copy(new java.io.ByteArrayInputStream(part.bytes), imageFile, StandardCopyOption.REPLACE_EXISTING);
+        GitHubPersistence.uploadFile(imageFile, "uploads/" + filename, "Salvar foto de produto");
         return filename;
     }
 
@@ -626,6 +638,105 @@ public class CatalogoMariaGomes {
         String text = "";
     }
 
+    static class GitHubPersistence {
+        private static final Pattern CONTENT_PATTERN = Pattern.compile("\"content\"\\s*:\\s*\"([^\"]*)\"");
+        private static final Pattern SHA_PATTERN = Pattern.compile("\"sha\"\\s*:\\s*\"([^\"]*)\"");
+
+        static boolean enabled() {
+            return GITHUB_TOKEN != null && !GITHUB_TOKEN.isBlank();
+        }
+
+        static void downloadFile(String repoPath, Path localPath) {
+            if (!enabled()) return;
+            try {
+                HttpResult result = request("GET", apiUrl(repoPath, true), null);
+                if (result.status == 404) return;
+                if (result.status < 200 || result.status >= 300) throw new IOException(result.body);
+                String content = match(CONTENT_PATTERN, result.body).orElse("");
+                if (content.isBlank()) return;
+                byte[] bytes = Base64.getDecoder().decode(content.replace("\\n", "").replace("\n", "").replace("\r", ""));
+                Files.createDirectories(localPath.getParent());
+                Files.write(localPath, bytes);
+            } catch (Exception ex) {
+                System.out.println("Nao foi possivel baixar " + repoPath + " do GitHub: " + ex.getMessage());
+            }
+        }
+
+        static void downloadReferencedImages(List<Product> products) {
+            if (!enabled()) return;
+            for (Product p : products) {
+                if (p.image == null || p.image.isBlank() || p.image.startsWith("http://") || p.image.startsWith("https://")) continue;
+                Path imageFile = UPLOAD_DIR.resolve(p.image);
+                if (!Files.exists(imageFile)) downloadFile("uploads/" + p.image, imageFile);
+            }
+        }
+
+        static void uploadFile(Path localPath, String repoPath, String message) {
+            if (!enabled()) return;
+            try {
+                if (!Files.exists(localPath)) return;
+                String content = Base64.getEncoder().encodeToString(Files.readAllBytes(localPath));
+                Optional<String> sha = currentSha(repoPath);
+                StringBuilder json = new StringBuilder();
+                json.append("{\"message\":\"").append(json(message)).append("\",");
+                json.append("\"content\":\"").append(content).append("\",");
+                json.append("\"branch\":\"").append(json(GITHUB_BRANCH)).append("\"");
+                sha.ifPresent(value -> json.append(",\"sha\":\"").append(json(value)).append("\""));
+                json.append("}");
+                HttpResult result = request("PUT", apiUrl(repoPath, false), json.toString());
+                if (result.status < 200 || result.status >= 300) throw new IOException(result.body);
+            } catch (Exception ex) {
+                System.out.println("Nao foi possivel salvar " + repoPath + " no GitHub: " + ex.getMessage());
+            }
+        }
+
+        private static Optional<String> currentSha(String repoPath) throws IOException {
+            HttpResult result = request("GET", apiUrl(repoPath, true), null);
+            if (result.status == 404) return Optional.empty();
+            if (result.status < 200 || result.status >= 300) throw new IOException(result.body);
+            return match(SHA_PATTERN, result.body);
+        }
+
+        private static String apiUrl(String repoPath, boolean includeRef) {
+            String encodedPath = java.util.Arrays.stream(repoPath.split("/"))
+                    .map(part -> URLEncoder.encode(part, StandardCharsets.UTF_8).replace("+", "%20"))
+                    .reduce((a, b) -> a + "/" + b).orElse("");
+            String url = "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + encodedPath;
+            return includeRef ? url + "?ref=" + URLEncoder.encode(GITHUB_BRANCH, StandardCharsets.UTF_8) : url;
+        }
+
+        private static HttpResult request(String method, String url, String body) throws IOException {
+            HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+            connection.setRequestMethod(method);
+            connection.setRequestProperty("Accept", "application/vnd.github+json");
+            connection.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+            connection.setRequestProperty("Authorization", "Bearer " + GITHUB_TOKEN);
+            if (body != null) {
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+                try (OutputStream out = connection.getOutputStream()) {
+                    out.write(body.getBytes(StandardCharsets.UTF_8));
+                }
+            }
+            int status = connection.getResponseCode();
+            InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            String text = stream == null ? "" : new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            connection.disconnect();
+            return new HttpResult(status, text);
+        }
+
+        private static Optional<String> match(Pattern pattern, String text) {
+            Matcher matcher = pattern.matcher(text);
+            return matcher.find() ? Optional.of(matcher.group(1)) : Optional.empty();
+        }
+
+        private static String json(String text) {
+            return text.replace("\\", "\\\\").replace("\"", "\\\"");
+        }
+    }
+
+    record HttpResult(int status, String body) {}
+
     static class Store {
         private final List<Product> products = new ArrayList<>();
         private final List<Movement> movements = new ArrayList<>();
@@ -785,6 +896,8 @@ public class CatalogoMariaGomes {
             List<String> movementLines = movements.stream().map(m -> String.join("\t",
                     m.id, m.productId, enc(m.productName), m.type, String.valueOf(m.quantity), enc(m.note), m.when.toString())).toList();
             Files.write(MOVEMENTS_FILE, movementLines, StandardCharsets.UTF_8);
+            GitHubPersistence.uploadFile(PRODUCTS_FILE, "data/produtos.tsv", "Salvar alteracoes de produtos");
+            GitHubPersistence.uploadFile(MOVEMENTS_FILE, "data/movimentacoes.tsv", "Salvar movimentacoes de estoque");
         }
 
         private static String enc(String text) {
