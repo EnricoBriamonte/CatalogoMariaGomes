@@ -13,3 +13,5 @@ services:
         value: EnricoBriamonte/CatalogoMariaGomes
       - key: GITHUB_BRANCH
         value: main
+      - key: PERSISTENCE_REQUIRED
+        value: "true"

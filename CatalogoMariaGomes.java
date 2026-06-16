@@ -46,11 +46,13 @@ public class CatalogoMariaGomes {
     private static final String GITHUB_REPO = System.getenv().getOrDefault("GITHUB_REPO", "EnricoBriamonte/CatalogoMariaGomes");
     private static final String GITHUB_BRANCH = System.getenv().getOrDefault("GITHUB_BRANCH", "main");
     private static final String GITHUB_TOKEN = System.getenv().getOrDefault("GITHUB_TOKEN", "");
+    private static final boolean PERSISTENCE_REQUIRED = Boolean.parseBoolean(System.getenv().getOrDefault("PERSISTENCE_REQUIRED", "false"));
     private static final Store STORE = new Store();
 
     public static void main(String[] args) throws Exception {
         Files.createDirectories(DATA_DIR);
         Files.createDirectories(UPLOAD_DIR);
+        GitHubPersistence.verifyConfiguration();
         GitHubPersistence.downloadFile("data/produtos.tsv", PRODUCTS_FILE);
         GitHubPersistence.downloadFile("data/movimentacoes.tsv", MOVEMENTS_FILE);
         STORE.load();
@@ -115,6 +117,10 @@ public class CatalogoMariaGomes {
             }
         } catch (Exception ex) {
             ex.printStackTrace();
+            try {
+                STORE.load();
+            } catch (Exception ignored) {
+            }
             send(exchange, 500, page("Erro", "<main class='wrap'><h1>Erro interno</h1><p>" + esc(ex.getMessage()) + "</p></main>"));
         }
     }
@@ -646,6 +652,12 @@ public class CatalogoMariaGomes {
             return GITHUB_TOKEN != null && !GITHUB_TOKEN.isBlank();
         }
 
+        static void verifyConfiguration() {
+            if (PERSISTENCE_REQUIRED && !enabled()) {
+                throw new IllegalStateException("GITHUB_TOKEN nao configurado no Render. As alteracoes nao podem ser salvas de forma permanente.");
+            }
+        }
+
         static void downloadFile(String repoPath, Path localPath) {
             if (!enabled()) return;
             try {
@@ -671,23 +683,22 @@ public class CatalogoMariaGomes {
             }
         }
 
-        static void uploadFile(Path localPath, String repoPath, String message) {
-            if (!enabled()) return;
-            try {
-                if (!Files.exists(localPath)) return;
-                String content = Base64.getEncoder().encodeToString(Files.readAllBytes(localPath));
-                Optional<String> sha = currentSha(repoPath);
-                StringBuilder json = new StringBuilder();
-                json.append("{\"message\":\"").append(json(message)).append("\",");
-                json.append("\"content\":\"").append(content).append("\",");
-                json.append("\"branch\":\"").append(json(GITHUB_BRANCH)).append("\"");
-                sha.ifPresent(value -> json.append(",\"sha\":\"").append(json(value)).append("\""));
-                json.append("}");
-                HttpResult result = request("PUT", apiUrl(repoPath, false), json.toString());
-                if (result.status < 200 || result.status >= 300) throw new IOException(result.body);
-            } catch (Exception ex) {
-                System.out.println("Nao foi possivel salvar " + repoPath + " no GitHub: " + ex.getMessage());
+        static void uploadFile(Path localPath, String repoPath, String message) throws IOException {
+            if (!enabled()) {
+                if (PERSISTENCE_REQUIRED) throw new IOException("GITHUB_TOKEN nao configurado no Render.");
+                return;
             }
+            if (!Files.exists(localPath)) return;
+            String content = Base64.getEncoder().encodeToString(Files.readAllBytes(localPath));
+            Optional<String> sha = currentSha(repoPath);
+            StringBuilder json = new StringBuilder();
+            json.append("{\"message\":\"").append(json(message)).append("\",");
+            json.append("\"content\":\"").append(content).append("\",");
+            json.append("\"branch\":\"").append(json(GITHUB_BRANCH)).append("\"");
+            sha.ifPresent(value -> json.append(",\"sha\":\"").append(json(value)).append("\""));
+            json.append("}");
+            HttpResult result = request("PUT", apiUrl(repoPath, false), json.toString());
+            if (result.status < 200 || result.status >= 300) throw new IOException("GitHub recusou salvar " + repoPath + " (HTTP " + result.status + "): " + result.body);
         }
 
         private static Optional<String> currentSha(String repoPath) throws IOException {
@@ -889,15 +900,31 @@ public class CatalogoMariaGomes {
 
         void save() throws IOException {
             Files.createDirectories(DATA_DIR);
+            byte[] previousProducts = Files.exists(PRODUCTS_FILE) ? Files.readAllBytes(PRODUCTS_FILE) : null;
+            byte[] previousMovements = Files.exists(MOVEMENTS_FILE) ? Files.readAllBytes(MOVEMENTS_FILE) : null;
             List<String> productLines = products.stream().map(p -> String.join("\t",
                     p.id, enc(p.name), enc(p.category), enc(p.description), p.price.toPlainString(), String.valueOf(p.stock), enc(p.image), String.valueOf(p.active), p.createdAt == null ? "" : p.createdAt.toString())).toList();
-            Files.write(PRODUCTS_FILE, productLines, StandardCharsets.UTF_8);
+            try {
+                Files.write(PRODUCTS_FILE, productLines, StandardCharsets.UTF_8);
 
-            List<String> movementLines = movements.stream().map(m -> String.join("\t",
-                    m.id, m.productId, enc(m.productName), m.type, String.valueOf(m.quantity), enc(m.note), m.when.toString())).toList();
-            Files.write(MOVEMENTS_FILE, movementLines, StandardCharsets.UTF_8);
-            GitHubPersistence.uploadFile(PRODUCTS_FILE, "data/produtos.tsv", "Salvar alteracoes de produtos");
-            GitHubPersistence.uploadFile(MOVEMENTS_FILE, "data/movimentacoes.tsv", "Salvar movimentacoes de estoque");
+                List<String> movementLines = movements.stream().map(m -> String.join("\t",
+                        m.id, m.productId, enc(m.productName), m.type, String.valueOf(m.quantity), enc(m.note), m.when.toString())).toList();
+                Files.write(MOVEMENTS_FILE, movementLines, StandardCharsets.UTF_8);
+                GitHubPersistence.uploadFile(PRODUCTS_FILE, "data/produtos.tsv", "Salvar alteracoes de produtos");
+                GitHubPersistence.uploadFile(MOVEMENTS_FILE, "data/movimentacoes.tsv", "Salvar movimentacoes de estoque");
+            } catch (IOException ex) {
+                restore(PRODUCTS_FILE, previousProducts);
+                restore(MOVEMENTS_FILE, previousMovements);
+                throw ex;
+            }
+        }
+
+        private void restore(Path path, byte[] previous) throws IOException {
+            if (previous == null) {
+                Files.deleteIfExists(path);
+            } else {
+                Files.write(path, previous);
+            }
         }
 
         private static String enc(String text) {
